@@ -372,10 +372,10 @@ Fixtures: small in-memory lists of `Book`/`Manga`-like DTOs; do not require full
 
 | Phase | Deliverable |
 |-------|-------------|
-| **P0** | DTOs + `RecommendationService` skeleton; library-only genre overlap; limits; exclusions |
-| **P1** | Seed resolve from local ids; ebook metadata enrichment via existing services; Riverpod + one UI entry |
-| **P2** | v1 quality gate from progress/status; diagnostics |
-| **P3** | `TitleEngagement` schema + reader instrumentation; full product gate |
+| **P0** | DTOs + `RecommendationService`; library-only genre overlap; limits; exclusions |
+| **P1** | Optional `MetadataEnricher` for seed genre/author fill; diagnostics (`enrichment:on`, `enriched:…`) |
+| **P2** | v1 quality gate from progress/status; diagnostics polish |
+| **P3** | Host `TitleEngagement` schema + reader instrumentation; full product gate |
 | **P4** | Optional discover/metadata candidates beyond library; dismissals cache |
 
 ## 20. Open technical decisions

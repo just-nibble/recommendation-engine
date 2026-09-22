@@ -19,7 +19,10 @@ dependencies:
 ```dart
 import 'package:recommendation_engine/recommendation_engine.dart';
 
-final engine = RecommendationService(myCatalogSource);
+final engine = RecommendationService(
+  myCatalogSource,
+  enricher: myMetadataEnricher, // optional — title → genres/author
+);
 
 final result = await engine.recommend(
   RecommendationRequest(
@@ -44,6 +47,8 @@ Implement [CatalogSource] to map your library into [CatalogItem]s:
 | `findById` | Resolve a seed that already has your opaque id |
 | `findByTitle` | Resolve title (+ optional author / kind hint) |
 | `listCandidates` | Library (or discover) pool to rank against |
+
+Optionally implement [MetadataEnricher] so title-only seeds (or catalog rows with empty genres) can be filled from Open Library / Google Books / etc. The package never opens network sockets itself.
 
 Opaque ids are host-defined strings (e.g. `book:42`, `manga:7`).
 

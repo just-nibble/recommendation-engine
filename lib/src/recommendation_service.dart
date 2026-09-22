@@ -1,5 +1,6 @@
 import 'catalog.dart';
 import 'genre_profile.dart';
+import 'metadata_enricher.dart';
 import 'models.dart';
 import 'quality_gate.dart';
 import 'scoring.dart';
@@ -12,6 +13,7 @@ class _ResolvedSeed {
   final String? id;
   final SeedGateDecision gate;
   final double weight;
+  final bool enriched;
 
   const _ResolvedSeed({
     required this.title,
@@ -21,17 +23,25 @@ class _ResolvedSeed {
     this.id,
     required this.gate,
     required this.weight,
+    this.enriched = false,
   });
 }
 
-/// In-process recommendation engine. Depends only on a host [CatalogSource].
+/// In-process recommendation engine. Depends only on a host [CatalogSource]
+/// and an optional [MetadataEnricher].
 class RecommendationService {
   final CatalogSource catalog;
+  final MetadataEnricher? enricher;
   final RecommendationGateConfig gateConfig;
+
+  /// When true (default) and [enricher] is set, fill missing seed genres/author.
+  final bool enableEnrichment;
 
   RecommendationService(
     this.catalog, {
+    this.enricher,
     this.gateConfig = RecommendationGateConfig.defaults,
+    this.enableEnrichment = true,
   });
 
   Future<RecommendationResult> recommend(RecommendationRequest request) async {
@@ -44,39 +54,25 @@ class RecommendationService {
 
     final limit = request.limit.clamp(1, 50);
     final kinds = request.contentKinds;
+    final allowEnrich = enableEnrichment && enricher != null;
+    diagnostics.add(allowEnrich ? 'enrichment:on' : 'enrichment:off');
 
     final resolved = <_ResolvedSeed>[];
     for (final seed in request.seeds) {
-      final r = await _resolveSeed(seed);
+      final r = await _resolveSeed(seed, allowEnrich: allowEnrich);
       if (r == null) {
         diagnostics.add('unresolved:${seed.title}');
-        if (seed.genres.isNotEmpty) {
-          final kind = seed.kind ?? RecommendationContentKind.ebook;
-          final gate = evaluateSeedGate(
-            kind: kind,
-            signals: seed.signals,
-            config: gateConfig,
-          );
-          if (gate != SeedGateDecision.exclude) {
-            resolved.add(
-              _ResolvedSeed(
-                title: seed.title.trim(),
-                author: seed.author,
-                kind: kind,
-                genres: normalizeGenres(seed.genres),
-                id: seed.id,
-                gate: gate,
-                weight: gate.weight,
-              ),
-            );
-          } else {
-            diagnostics.add('gated_out:${seed.title}');
-          }
-        }
         continue;
       }
       if (r.gate == SeedGateDecision.exclude) {
         diagnostics.add('gated_out:${r.title}');
+        continue;
+      }
+      if (r.enriched) {
+        diagnostics.add('enriched:${r.title}');
+      }
+      if (r.genres.isEmpty) {
+        diagnostics.add('no_genres:${r.title}');
         continue;
       }
       resolved.add(r);
@@ -196,7 +192,10 @@ class RecommendationService {
     );
   }
 
-  Future<_ResolvedSeed?> _resolveSeed(RecommendationSeed seed) async {
+  Future<_ResolvedSeed?> _resolveSeed(
+    RecommendationSeed seed, {
+    required bool allowEnrich,
+  }) async {
     final title = seed.title.trim();
     if (title.isEmpty) return null;
 
@@ -209,9 +208,66 @@ class RecommendationService {
       author: seed.author,
       kindHint: seed.kind,
     );
-    if (item == null) return null;
 
-    final genres = normalizeGenres([...seed.genres, ...item.genres]);
+    var genres = normalizeGenres([
+      ...seed.genres,
+      ...?item?.genres,
+    ]);
+    var author = seed.author ?? item?.author;
+    var kind = item?.kind ?? seed.kind ?? RecommendationContentKind.ebook;
+    var resolvedTitle = item?.title ?? title;
+    var id = item?.id ?? seed.id;
+    var enriched = false;
+
+    final needsEnrich = allowEnrich &&
+        (genres.isEmpty || author == null || author.trim().isEmpty);
+
+    if (needsEnrich && enricher != null) {
+      final hit = await enricher!.enrich(
+        title: resolvedTitle,
+        author: author,
+        kindHint: kind,
+      );
+      if (hit != null) {
+        if (hit.hasGenres && genres.isEmpty) {
+          genres = normalizeGenres(hit.genres);
+          enriched = true;
+        } else if (hit.hasGenres) {
+          genres = normalizeGenres([...genres, ...hit.genres]);
+          enriched = true;
+        }
+        author ??= hit.author;
+        kind = hit.kind ?? kind;
+        if (hit.title != null && hit.title!.trim().isNotEmpty) {
+          resolvedTitle = hit.title!.trim();
+        }
+      }
+    }
+
+    // Catalog miss + no genres after enrichment → cannot recommend from seed.
+    if (item == null && genres.isEmpty) {
+      return null;
+    }
+
+    // Synthetic seed from enrichment / caller genres only.
+    if (item == null) {
+      final gate = evaluateSeedGate(
+        kind: kind,
+        signals: seed.signals,
+        config: gateConfig,
+      );
+      return _ResolvedSeed(
+        title: resolvedTitle,
+        author: author,
+        kind: kind,
+        genres: genres,
+        id: id,
+        gate: gate,
+        weight: gate.weight,
+        enriched: enriched,
+      );
+    }
+
     final progress = seed.signals?.progress ?? item.progress;
     var finished = seed.signals?.finished ?? item.finished;
     if (finished == null) {
@@ -224,7 +280,7 @@ class RecommendationService {
     }
 
     final gate = evaluateSeedGate(
-      kind: item.kind,
+      kind: kind,
       progress: progress,
       finished: finished,
       mangaReadingStatus: item.readingStatus,
@@ -233,13 +289,14 @@ class RecommendationService {
     );
 
     return _ResolvedSeed(
-      title: item.title,
-      author: seed.author ?? item.author,
-      kind: item.kind,
+      title: resolvedTitle,
+      author: author,
+      kind: kind,
       genres: genres,
       id: item.id,
       gate: gate,
       weight: gate.weight,
+      enriched: enriched,
     );
   }
 

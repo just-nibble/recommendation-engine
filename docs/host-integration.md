@@ -73,8 +73,27 @@ class KomaCatalogSource implements CatalogSource {
       );
 }
 
+/// Optional: wrap your existing Open Library / Google Books lookup.
+class KomaMetadataEnricher implements MetadataEnricher {
+  @override
+  Future<MetadataEnrichment?> enrich({
+    required String title,
+    String? author,
+    RecommendationContentKind? kindHint,
+  }) async {
+    // e.g. final hits = await lookupBooks(title: title, author: author);
+    // map first hit → MetadataEnrichment(genres: ..., author: ..., ...)
+    return null;
+  }
+}
+
 // Usage in the host:
-// final engine = RecommendationService(KomaCatalogSource(...));
+// final engine = RecommendationService(
+//   KomaCatalogSource(...),
+//   enricher: KomaMetadataEnricher(...),
+// );
 ```
 
 Do **not** copy recommendation ranking logic into the host. Keep adapters thin.
+
+Riverpod / UI wiring stays in the host app (not this package).
