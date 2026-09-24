@@ -6,10 +6,16 @@ enum RecommendationContentKind {
 }
 
 enum RecommendationCandidateScope {
-  /// Only items returned by [CatalogSource.listCandidates] for library scope.
+  /// Only local library rows from [CatalogSource.listCandidates].
   libraryOnly,
 
-  /// Library plus metadata / discover hits (host decides what to return).
+  /// Library plus Discover / extension / metadata hits supplied by the host.
+  ///
+  /// The engine passes [genreHints] into [CatalogSource.listCandidates] so the
+  /// host can search installed manga sources (and optional ebook metadata).
+  libraryAndDiscover,
+
+  /// Legacy alias of [libraryAndDiscover] (same behavior).
   libraryAndMetadata,
 }
 
@@ -38,7 +44,7 @@ class RecommendationExclusion {
   final String? author;
   final RecommendationContentKind? kind;
 
-  /// Host-opaque id (e.g. `book:12`, `manga:3`).
+  /// Host-opaque id (e.g. `book:12`, `manga:3`, `ext:…`).
   final String? id;
 
   const RecommendationExclusion({
@@ -87,6 +93,11 @@ class RecommendationRequest {
     this.exclude = const [],
     this.scope = RecommendationCandidateScope.libraryOnly,
   });
+
+  /// True when the host should also supply Discover / extension candidates.
+  bool get wantsExternalCandidates =>
+      scope == RecommendationCandidateScope.libraryAndDiscover ||
+      scope == RecommendationCandidateScope.libraryAndMetadata;
 }
 
 class RecommendationItem {
@@ -100,6 +111,15 @@ class RecommendationItem {
   final String? coverPathOrUrl;
   final String? sourceLabel;
 
+  /// Extension source id when this is a Discover / catalogue hit.
+  final String? sourceId;
+
+  /// Extension manga URL when this is a Discover / catalogue hit.
+  final String? sourceUrl;
+
+  /// Whether the title is already in the user's library.
+  final bool inLibrary;
+
   const RecommendationItem({
     required this.title,
     this.author,
@@ -110,6 +130,9 @@ class RecommendationItem {
     this.id,
     this.coverPathOrUrl,
     this.sourceLabel,
+    this.sourceId,
+    this.sourceUrl,
+    this.inLibrary = true,
   });
 }
 

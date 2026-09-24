@@ -9,6 +9,9 @@ class ScoredCandidate {
   final String? id;
   final String? coverPathOrUrl;
   final String sourceLabel;
+  final String? sourceId;
+  final String? sourceUrl;
+  final bool inLibrary;
   final double score;
   final List<String> matchedGenres;
 
@@ -20,6 +23,9 @@ class ScoredCandidate {
     this.id,
     this.coverPathOrUrl,
     this.sourceLabel = 'library',
+    this.sourceId,
+    this.sourceUrl,
+    this.inLibrary = true,
     required this.score,
     required this.matchedGenres,
   });
@@ -45,6 +51,9 @@ ScoreBreakdown scoreAgainstProfile({
   String? candidateAuthor,
   double kindMatchBonus = 0,
   double authorBonus = 0.5,
+  bool inLibrary = true,
+  double alreadyOwnedPenalty = 0,
+  double externalBonus = 0,
 }) {
   if (profile.isEmpty) {
     return const ScoreBreakdown(
@@ -94,6 +103,15 @@ ScoreBreakdown scoreAgainstProfile({
   }
 
   score += kindMatchBonus;
+
+  if (inLibrary) {
+    score -= alreadyOwnedPenalty;
+  } else {
+    score += externalBonus;
+  }
+
+  if (score < 0) score = 0;
+
   return ScoreBreakdown(
     score: score,
     matchedGenres: matched,
@@ -109,3 +127,16 @@ String normalizeTitleKey(String title) =>
 
 bool titlesMatch(String a, String b) =>
     normalizeTitleKey(a) == normalizeTitleKey(b);
+
+/// Keep the highest-scoring row per normalized title (+ kind).
+List<ScoredCandidate> collapseDuplicateTitles(List<ScoredCandidate> scored) {
+  final best = <String, ScoredCandidate>{};
+  for (final s in scored) {
+    final key = '${s.kind.name}|${normalizeTitleKey(s.title)}';
+    final prev = best[key];
+    if (prev == null || s.score > prev.score) {
+      best[key] = s;
+    }
+  }
+  return best.values.toList();
+}
