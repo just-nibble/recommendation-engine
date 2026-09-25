@@ -1,8 +1,13 @@
 import 'models.dart';
 
-/// Normalized library / catalog row supplied by the host app.
+/// Normalized library / catalog / Discover row supplied by the host app.
 class CatalogItem {
-  /// Host-opaque stable id (e.g. `book:42`, `manga:7`).
+  /// Host-opaque stable id.
+  ///
+  /// Conventions:
+  /// - library ebook: `book:{isarId}`
+  /// - library manga: `manga:{isarId}`
+  /// - extension hit: `ext:{urlEncodedSourceId}:{urlEncodedUrl}`
   final String id;
   final String title;
   final String? author;
@@ -16,6 +21,13 @@ class CatalogItem {
   final String? coverPathOrUrl;
   final String sourceLabel;
 
+  /// True when already in the user's library. Discover hits should be `false`.
+  final bool inLibrary;
+
+  /// Extension / catalogue identity (Discover hits).
+  final String? sourceId;
+  final String? sourceUrl;
+
   const CatalogItem({
     required this.id,
     required this.title,
@@ -27,6 +39,9 @@ class CatalogItem {
     this.readingStatus,
     this.coverPathOrUrl,
     this.sourceLabel = 'library',
+    this.inLibrary = true,
+    this.sourceId,
+    this.sourceUrl,
   });
 }
 
@@ -42,10 +57,19 @@ abstract class CatalogSource {
     RecommendationContentKind? kindHint,
   });
 
-  /// Candidate pool for ranking (typically the user's library).
+  /// Candidate pool for ranking.
+  ///
+  /// When [scope] is [RecommendationCandidateScope.libraryAndDiscover] (or the
+  /// legacy [RecommendationCandidateScope.libraryAndMetadata] alias), the host
+  /// SHOULD also return Discover / extension hits. Use [genreHints] (consensus
+  /// genres from gated seeds) as search queries against installed sources.
+  /// Cap roughly at [softLimit].
   Future<List<CatalogItem>> listCandidates({
     Set<RecommendationContentKind>? kinds,
-    RecommendationCandidateScope scope = RecommendationCandidateScope.libraryOnly,
+    RecommendationCandidateScope scope =
+        RecommendationCandidateScope.libraryOnly,
+    List<String> genreHints = const [],
+    int softLimit = 80,
   });
 }
 
@@ -87,9 +111,31 @@ class InMemoryCatalogSource implements CatalogSource {
   @override
   Future<List<CatalogItem>> listCandidates({
     Set<RecommendationContentKind>? kinds,
-    RecommendationCandidateScope scope = RecommendationCandidateScope.libraryOnly,
+    RecommendationCandidateScope scope =
+        RecommendationCandidateScope.libraryOnly,
+    List<String> genreHints = const [],
+    int softLimit = 80,
   }) async {
-    if (kinds == null || kinds.isEmpty) return List.unmodifiable(items);
-    return items.where((i) => kinds.contains(i.kind)).toList(growable: false);
+    Iterable<CatalogItem> pool = items;
+    if (!scopeWantsExternal(scope)) {
+      pool = pool.where((i) => i.inLibrary);
+    }
+    if (kinds != null && kinds.isNotEmpty) {
+      pool = pool.where((i) => kinds.contains(i.kind));
+    }
+    // When external is requested and genreHints are set, prefer items that
+    // share at least one hint (library items always included).
+    if (scopeWantsExternal(scope) && genreHints.isNotEmpty) {
+      final hints = genreHints.map((g) => g.toLowerCase()).toSet();
+      pool = pool.where((i) {
+        if (i.inLibrary) return true;
+        return i.genres.any((g) => hints.contains(g.toLowerCase()));
+      });
+    }
+    return pool.take(softLimit).toList(growable: false);
   }
 }
+
+bool scopeWantsExternal(RecommendationCandidateScope scope) =>
+    scope == RecommendationCandidateScope.libraryAndDiscover ||
+    scope == RecommendationCandidateScope.libraryAndMetadata;

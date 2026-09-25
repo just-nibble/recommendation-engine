@@ -37,11 +37,19 @@ class RecommendationService {
   /// When true (default) and [enricher] is set, fill missing seed genres/author.
   final bool enableEnrichment;
 
+  /// Applied to library rows when [RecommendationRequest.wantsExternalCandidates].
+  final double alreadyOwnedPenalty;
+
+  /// Applied to Discover / extension rows when external candidates are wanted.
+  final double externalBonus;
+
   RecommendationService(
     this.catalog, {
     this.enricher,
     this.gateConfig = RecommendationGateConfig.defaults,
     this.enableEnrichment = true,
+    this.alreadyOwnedPenalty = 0.35,
+    this.externalBonus = 0.25,
   });
 
   Future<RecommendationResult> recommend(RecommendationRequest request) async {
@@ -56,6 +64,9 @@ class RecommendationService {
     final kinds = request.contentKinds;
     final allowEnrich = enableEnrichment && enricher != null;
     diagnostics.add(allowEnrich ? 'enrichment:on' : 'enrichment:off');
+    diagnostics.add(
+      request.wantsExternalCandidates ? 'scope:discover' : 'scope:library',
+    );
 
     final resolved = <_ResolvedSeed>[];
     for (final seed in request.seeds) {
@@ -99,11 +110,22 @@ class RecommendationService {
         .where((a) => a.trim().isNotEmpty)
         .toList();
 
+    final softLimit = request.wantsExternalCandidates ? 120 : 80;
     final candidates = await catalog.listCandidates(
       kinds: kinds,
       scope: request.scope,
+      genreHints: profile.keys,
+      softLimit: softLimit,
     );
     diagnostics.add('candidates:${candidates.length}');
+    final externalCount = candidates.where((c) => !c.inLibrary).length;
+    if (request.wantsExternalCandidates) {
+      diagnostics.add('external:$externalCount');
+    }
+
+    final ownedPenalty =
+        request.wantsExternalCandidates ? alreadyOwnedPenalty : 0.0;
+    final extBonus = request.wantsExternalCandidates ? externalBonus : 0.0;
 
     final scored = <ScoredCandidate>[];
     for (final c in candidates) {
@@ -114,6 +136,9 @@ class RecommendationService {
         candidateGenres: c.genres,
         seedAuthors: seedAuthors,
         candidateAuthor: c.author,
+        inLibrary: c.inLibrary,
+        alreadyOwnedPenalty: ownedPenalty,
+        externalBonus: extBonus,
       );
       if (breakdown.score <= 0) continue;
 
@@ -126,15 +151,23 @@ class RecommendationService {
           id: c.id,
           coverPathOrUrl: c.coverPathOrUrl,
           sourceLabel: c.sourceLabel,
+          sourceId: c.sourceId,
+          sourceUrl: c.sourceUrl,
+          inLibrary: c.inLibrary,
           score: breakdown.score,
           matchedGenres: breakdown.matchedGenres,
         ),
       );
     }
 
-    scored.sort((a, b) {
+    final collapsed = collapseDuplicateTitles(scored);
+    collapsed.sort((a, b) {
       final cmp = b.score.compareTo(a.score);
       if (cmp != 0) return cmp;
+      // Prefer external over library on ties when discover is enabled.
+      if (request.wantsExternalCandidates && a.inLibrary != b.inLibrary) {
+        return a.inLibrary ? 1 : -1;
+      }
       return normalizeTitleKey(a.title).compareTo(normalizeTitleKey(b.title));
     });
 
@@ -142,12 +175,12 @@ class RecommendationService {
     if (split) {
       final ebookCap = (request.limitEbook ?? 0).clamp(0, 50);
       final mangaCap = (request.limitManga ?? 0).clamp(0, 50);
-      final ebooks = scored
+      final ebooks = collapsed
           .where((s) => s.kind == RecommendationContentKind.ebook)
           .take(ebookCap)
           .map(_toItem)
           .toList();
-      final manga = scored
+      final manga = collapsed
           .where((s) => s.kind == RecommendationContentKind.manga)
           .take(mangaCap)
           .map(_toItem)
@@ -161,7 +194,7 @@ class RecommendationService {
       );
     }
 
-    final items = scored.take(limit).map(_toItem).toList();
+    final items = collapsed.take(limit).map(_toItem).toList();
     return RecommendationResult(
       items: items,
       ebooks: items
@@ -178,7 +211,9 @@ class RecommendationService {
   RecommendationItem _toItem(ScoredCandidate s) {
     final reason = s.matchedGenres.isEmpty
         ? null
-        : 'Shared: ${s.matchedGenres.take(3).join(', ')}';
+        : s.inLibrary
+            ? 'Shared: ${s.matchedGenres.take(3).join(', ')}'
+            : 'Discover · ${s.matchedGenres.take(3).join(', ')}';
     return RecommendationItem(
       title: s.title,
       author: s.author,
@@ -189,6 +224,9 @@ class RecommendationService {
       id: s.id,
       coverPathOrUrl: s.coverPathOrUrl,
       sourceLabel: s.sourceLabel,
+      sourceId: s.sourceId,
+      sourceUrl: s.sourceUrl,
+      inLibrary: s.inLibrary,
     );
   }
 

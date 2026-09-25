@@ -2,7 +2,7 @@ name: recommendation_engine
 description: >
   Host-agnostic content recommendation engine for ebook/manga readers.
   Import from a host app (e.g. Koma) and supply a CatalogSource adapter.
-version: 0.2.0
+version: 0.3.0
 publish_to: none
 
 environment:
